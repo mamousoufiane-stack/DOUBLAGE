@@ -1,0 +1,17 @@
+codex.exe
+node_modules/
+*.zip
+*.png
+ritmo/
+test-results/
+.qa-browser/
+qa.cjs
+*.tar.gz
+.tools/
+media-source/
+.qa-browser-local/
+qa-local.cjs
+__pycache__/
+*.wav
+.openai/
+qa-guided.cjs

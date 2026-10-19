@@ -1,0 +1,6 @@
+SoundTouchJS 0.1.30, distributed under LGPL-2.1-or-later.
+Copyright notices are retained in soundtouch.js; license is in LICENSE.
+Unmodified distribution and original source mappings: soundtouch.js.map.
+Source distribution: https://registry.npmjs.org/soundtouchjs/-/soundtouchjs-0.1.30.tgz
+Project: https://github.com/cutterbl/SoundTouchJS
+This JavaScript module is loaded locally and can be replaced independently.
