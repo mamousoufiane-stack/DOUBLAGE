@@ -32,7 +32,9 @@ function drawPhraseWave() {
   else if(candidate)cursor=audio.getAttribute('src')===candidate.url?Math.min(total,audio.currentTime):0;
   const label=cursor<pre?'Prépare-toi':cursor<pre+core?'À toi de parler !':cursor<total?'Termine tranquillement':'Prise terminée';
   if($('#speakCue').textContent!==label)$('#speakCue').textContent=label;
-  const canvas=$('#phraseWave'),g=canvas.getContext('2d'),W=canvas.width,H=canvas.height;
+  const canvas=$('#phraseWave'),g=canvas.getContext('2d'),W=Math.max(1,Math.round(canvas.clientWidth)),H=230,dpr=Math.min(devicePixelRatio||1,2);
+  if(canvas.width!==Math.round(W*dpr)||canvas.height!==H*dpr){canvas.width=Math.round(W*dpr);canvas.height=H*dpr;}
+  g.setTransform(dpr,0,0,dpr,0,0);
   const zoom=Number($('#phraseZoom').value),span=total/zoom,start=Math.max(0,Math.min(total-span,cursor-span*.4));
   const x=time=>(time-start)/span*W;
   g.clearRect(0,0,W,H);
@@ -52,7 +54,8 @@ function drawPhraseWave() {
   }
   for(const boundary of [pre,pre+core]){g.strokeStyle='#ffffff65';g.setLineDash([6,5]);g.beginPath();g.moveTo(x(boundary),32);g.lineTo(x(boundary),H-25);g.stroke();}g.setLineDash([]);
   g.fillStyle='#c5c1d4';g.font='15px Segoe UI';
-  for(let second=Math.ceil(start*2)/2;second<start+span;second+=.5)g.fillText(second.toFixed(1)+' s',Math.max(0,x(second)+3),H-7);
+  const tick=Math.max(.5,Math.ceil(span/W*100)/2);
+  for(let second=Math.ceil(start/tick)*tick;second<start+span;second+=tick)g.fillText(second.toFixed(1)+' s',Math.max(0,x(second)+3),H-7);
   g.strokeStyle='#fff';g.lineWidth=3;g.beginPath();g.moveTo(x(cursor),30);g.lineTo(x(cursor),H-25);g.stroke();
 }
 // The montage inserts the margins as holds at each selected line boundary.
