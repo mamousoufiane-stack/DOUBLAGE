@@ -8,11 +8,24 @@ Python 3 est nécessaire. Aucune installation supplémentaire pour jouer.
 Alternative : python server.py --open
 
 NOUVEAUTES
+- Capture PCM horodatée sur le fil audio : la courbe et la prise utilisent
+  les mêmes échantillons, avec des repères toutes les 20 ms. La courbe live
+  utilise une fenêtre de 256 échantillons au lieu de 2048. Le micro est demandé
+  sans réduction de bruit ni annulation d'écho. Aucun retour micro aux enceintes.
+  Cela ne mesure ni n'annule le retard matériel d'un casque Bluetooth.
+- La demande de micro part du clic avant l'attente de préparation audio.
+  Sur iPad, ouvrir le site HTTPS directement dans Safari et autoriser le micro
+  pour ce site. Un refus antérieur se modifie dans les réglages du site.
+- Un écran de progression prépare le montage : vidéo entièrement téléchargée
+  en mémoire, audio décodé et chronologie prête avant de proposer la réécoute.
+  La lecture ne relance plus play/pause à chaque image. Les silences dans les
+  marges sont retirés, en conservant 100 ms autour du son détecté ; seules les
+  marges audibles prolongent la scène. La zone de dialogue n'est jamais rognée.
 - Graphique agrandi par phrase : modèle VF violet et prise verte superposés,
   curseur blanc et zoom temporel x2/x3. Trois zones indiquent quand se préparer,
   parler et terminer. Le modèle contient aussi les bruitages de la VF.
 - Le micro capture 0,6 seconde avant et 1 seconde après chaque réplique.
-  Ces marges restent dans la prise ET dans le montage audio exporté.
+  Ces marges restent dans la prise. Au montage, leur silence est raccourci.
   Le montage insère de courtes pauses d'image aux limites de chaque phrase
   enregistrée, sans accélérer ni superposer la fin avec le personnage suivant.
 - Choisir un personnage ou Toutes les voix, puis Enregistrer ma voix.
@@ -81,6 +94,9 @@ FICHIERS
 dist/index.html : interface.
 dist/studio.js : lecteur, micro, graphiques et synchronisation.
 dist/guided.js : étapes par réplique et assemblage audio local.
+dist/comfort.js : graphique agrandi, marges et chronologie du montage.
+dist/capture.js et pcm-capture.js : capture audio PCM et courbe horodatée.
+dist/playback.js : préparation en mémoire et lecture du montage.
 dist/vendor : SoundTouchJS 0.1.30, sources et licence LGPL-2.1 incluses.
 dist/local-scenes.js et dist/media/scenes.json : textes, personnages, timings,
 sources et courbes des trois extraits.

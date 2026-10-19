@@ -2,7 +2,7 @@
 const recordingLead = .6, recordingTail = 1;
 const phraseGraph = document.createElement('div');
 phraseGraph.className = 'phrase-graph';
-phraseGraph.innerHTML = `<div class="phrase-graph-heading"><strong>Le rythme de cette phrase</strong><label>Zoom <select id="phraseZoom"><option value="1">Phrase entière</option><option value="2">×2</option><option value="3">×3</option></select></label></div><canvas id="phraseWave" width="1200" height="230" aria-label="Graphique agrandi : voix française en violet, ta voix en vert et curseur de progression"></canvas><div class="phrase-legend"><span>🟣 Modèle VF (avec bruitages)</span><span>🟢 Ta voix</span><strong id="speakCue" role="status" aria-live="polite">Prépare-toi</strong></div><p class="phrase-margin-note">Le micro prend 0,6 s d’avance et te laisse 1 s pour finir. Les deux marges sont gardées au montage.</p>`;
+phraseGraph.innerHTML = `<div class="phrase-graph-heading"><strong>Le rythme de cette phrase</strong><label>Zoom <select id="phraseZoom"><option value="1">Phrase entière</option><option value="2">×2</option><option value="3">×3</option></select></label></div><canvas id="phraseWave" width="1200" height="230" aria-label="Graphique agrandi : voix française en violet, ta voix en vert et curseur de progression"></canvas><div class="phrase-legend"><span>🟣 Modèle VF (avec bruitages)</span><span>🟢 Ta voix</span><strong id="speakCue" role="status" aria-live="polite">Prépare-toi</strong></div><p class="phrase-margin-note">Le micro prend 0,6 s d’avance et te laisse 1 s pour finir. Ta voix est conservée ; les silences dans ces marges sont raccourcis au montage.</p>`;
 $('#phraseText').after(phraseGraph);
 function phraseTiming(w = workshop) {
   const line=w.scene.lines[w.queue[w.index]],core=(line[1]-line[0])/w.rate;
@@ -10,17 +10,17 @@ function phraseTiming(w = workshop) {
 }
 function updateCapture() {
   const w=workshop,c=w?.capture;if(!c || !recording)return;
-  c.elapsed=Math.min(c.total,(performance.now()-c.started)/1000);
+  c.elapsed=Math.max(0,Math.min(c.total,audioContext.currentTime-c.startedAudio));
   const relative=c.elapsed-c.pre;
   if(relative>=0 && relative<c.core) {
     if(!c.videoStarted){c.videoStarted=true;if(current.media)video.play().catch(e=>{c.failed=true;pauseSegment();$('#phraseHint').textContent=e.message;});}
     t=Math.min(c.line[1],c.line[0]+relative*w.rate);
   } else if(relative>=c.core) {video.pause();t=c.line[1];}
   else t=c.line[0];
-  if(c.elapsed>=c.total)pauseSegment();
+  // The audio thread stops at the exact final sample, even if drawing is late.
 }
 function capturePeak(peak) {
-  const c=workshop?.capture;if(!c||!recording)return;
+  const c=workshop?.capture;if(!c||!recording||c.nativeClock)return;
   const i=Math.floor(c.elapsed*50);c.peaks[i]=Math.max(c.peaks[i]||0,peak);
 }
 function drawPhraseWave() {

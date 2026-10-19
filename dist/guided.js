@@ -40,38 +40,30 @@ async function recordPhrase() {
   const w = workshop; if (!w || busy || recording || playing) return;
   busy = true; update(); $('#phraseAudio').pause();
   try {
-    if (!window.MediaRecorder) throw Error('Utilise Chrome ou Edge pour enregistrer.');
     await openMic();
     const timing=phraseTiming(w),line=timing.line;
     await seek(line[0]); capturePeaks = []; $('#hearReference').checked = false; reference.pause();
+    const rec=await createPcmRecorder(audioContext,micSource);recorder=rec;
     for(let n=3;n>0;n--) { $('#countdown').hidden=false; $('#countdown').textContent=n; await sleep(700); }
     $('#countdown').hidden=true;
-    const chunks=[], mimeType=['audio/webm;codecs=opus','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m));
-    const rec=new MediaRecorder(stream,mimeType?{mimeType}:{}); recorder=rec;
-    const capture={...timing,elapsed:0,peaks:[],started:0,timer:null,videoStarted:false,failed:false};
+    const capture={...timing,elapsed:0,peaks:[],startedAudio:0,timer:null,videoStarted:false,failed:false,nativeClock:true};
     let failed=false;
-    rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-    rec.onerror=()=>{failed=true; pauseSegment();};
-    rec.onstop=async()=>{
+    rec.onpeak=(index,value)=>{capture.peaks[index]=value;};
+    rec.onerror=e=>{failed=true;pauseSegment();w.capture=null;recording=false;busy=false;closeMic();$('#phraseHint').textContent=e.message;update();};
+    rec.onstop=({samples,sampleRate})=>{
+      pauseSegment();
       clearInterval(capture.timer);
-      if(!failed && !capture.failed && chunks.length && workshop===w) {
+      if(!failed && !capture.failed && samples.length && workshop===w) {
         disposePhrase(w.candidate);
-        const blob=new Blob(chunks,{type:rec.mimeType});
+        const blob=wavBlob([samples,samples],sampleRate);
         const candidate={blob,url:URL.createObjectURL(blob),offset:0,pre:timing.pre,post:timing.post,peaks:[...capture.peaks]};
         w.candidate=candidate;
-        try {
-          const buffer=await audioContext.decodeAudioData(await blob.arrayBuffer()),samples=buffer.getChannelData(0),peaks=[];
-          for(let a=0;a<samples.length;a+=Math.round(buffer.sampleRate/50)){
-            let peak=0;for(let b=a;b<Math.min(samples.length,a+buffer.sampleRate/50);b++)peak=Math.max(peak,Math.abs(samples[b]));peaks.push(peak);
-          }
-          candidate.peaks=peaks;
-        }catch{/* The captured live waveform remains available if preview decoding fails. */}
         $('#phraseHint').textContent='Écoute ta prise. Elle te plaît ? Valide ! Sinon, recommence cette phrase.';
       } else $('#phraseHint').textContent='La prise a échoué. Tu peux recommencer.';
       w.capture=null;
       recording=false;busy=false;closeMic();update();
     };
-    rec.start();recording=true;w.capture=capture;capture.started=performance.now();
+    capture.startedAudio=await rec.start(capture.total);recording=true;w.capture=capture;
     video.playbackRate=w.rate;syncBackground();segmentEnd=null;playing=false;busy=false;
     capture.timer=setInterval(updateCapture,25);
     $('#phraseHint').textContent='Suis le curseur blanc. Le micro enregistre déjà : tu peux commencer sans craindre une coupure.';
@@ -179,23 +171,30 @@ async function acceptPhrase() {
 }
 async function finishWorkshop() {
   const w=workshop;busy=true;update();$('#phraseHint').textContent='Assemblage de tes phrases et des voix françaises…';
+  const audioReady=setupAudio();audioReady.catch(()=>{});
   try {
-    await setupAudio();
-    const [base,ambience]=await Promise.all([w.scene.reference?decodeFile(w.scene.reference):null,w.scene.media?decodeFile(w.scene.media):null]);
-    const phrases=await Promise.all([...w.accepted].map(async([index,p])=>({index,offset:p.offset,pre:p.pre,post:p.post,buffer:await audioContext.decodeAudioData(await p.blob.arrayBuffer())})));
+    await preparationStep(1,'Chargement complet de la vidéo et des voix…');
+    await withMediaTimeout(audioReady);
+    const videoURL=await prepareSceneVideo(w.scene);
+    const [base,ambience]=await Promise.all([w.scene.reference?decodeFile(w.scene.reference):null,videoURL?decodeFile(videoURL):null]);
+    await preparationStep(2,'Préparation de tes prises et de la vitesse…');
+    const phrases=await Promise.all([...w.accepted].map(async([index,p])=>trimSilentMargins({index,offset:p.offset,pre:p.pre,post:p.post,buffer:await audioContext.decodeAudioData(await p.blob.arrayBuffer())},w.scene.lines[index],w.rate)));
     const backing=await stretchBacking(backingTrack(w.scene,base,ambience,w.role,audioContext.sampleRate),w.rate);
+    await preparationStep(3,'Assemblage du son et synchronisation de l’image…');
     const {channels,timeline,duration:mixDuration}=createComfortMix(w.scene,backing,phrases,audioContext.sampleRate,w.rate),peaks=[];
     const stride=Math.round(audioContext.sampleRate/25);
     for(let i=0;i<channels[0].length;i+=stride){let peak=0;for(let j=i;j<Math.min(channels[0].length,i+stride);j++)peak=Math.max(peak,Math.abs(channels[0][j]));peaks.push(peak);}
     const blob=wavBlob(channels,audioContext.sampleRate);
-    takes.unshift({scene:w.scene,role:w.role,rate:w.rate,start:0,id:Date.now(),url:URL.createObjectURL(blob),type:'audio/wav',peaks,length:mixDuration,mixed:true,timeline});
+    const buffer=makePlaybackBuffer(channels,audioContext.sampleRate);
+    await preparationStep(4,'Montage prêt !');
+    takes.unshift({scene:w.scene,role:w.role,rate:w.rate,start:0,id:Date.now(),url:URL.createObjectURL(blob),type:'audio/wav',peaks,length:mixDuration,mixed:true,timeline,buffer});
     busy=false;leaveWorkshop();renderTakes();view('takes');status('Ton montage est prêt : tes phrases et les autres voix en VF !');
   } catch(e) {
     busy=false;
     // Retain the last take so validation retries assembly without recording again.
     w.candidate=w.accepted.get(w.queue[w.index]);w.accepted.delete(w.queue[w.index]);
     $('#phraseHint').textContent='Montage impossible : '+e.message+' Clique à nouveau sur Valider pour réessayer.';update();
-  }
+  } finally {preparation.hidden=true;}
 }
 $('#phraseRecord').onclick=recordPhrase;
 $('#phraseModel').onclick=modelPhrase;

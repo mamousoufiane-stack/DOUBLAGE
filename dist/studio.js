@@ -8,7 +8,7 @@ let current = scenes[0], role = -1, t = 0, rate = .75, playing = false;
 let busy = false, recording = false, reviewing = false, last = 0, selection = 0;
 let recorder = null, stream = null, takes = [], pendingReview = null;
 let audioContext, analyser, micSource, reviewSource, referenceSource;
-let waveform = new Float32Array(2048), liveLevel = 0, capturePeaks = [], reviewPeaks = [];
+let waveform = new Float32Array(256), liveLevel = 0, capturePeaks = [], reviewPeaks = [];
 let activePeakIndex = -1, monitoring = false, ready = true, mediaFailure = false;
 let pixelsPerSecond = 100;
 let workshop = null, segmentEnd = null, mixedPlayback = false;
@@ -74,7 +74,7 @@ async function selectScene(s) {
   reference.pause(); reference.removeAttribute('src'); reference.load();
   if (s.reference) { reference.src = s.reference; reference.load(); }
   if (!s.media) { video.removeAttribute('src'); video.load(); status('Entraîne-toi, puis lance-toi !'); update(); return; }
-  status('Chargement de la vidéo locale…'); video.src = s.media; video.load();
+  status('Chargement de la vidéo…'); video.src = typeof cachedVideoURL==='function'?cachedVideoURL(s.media):s.media; video.load();
   try {
     await waitMedia(video, 'canplay', () => video.readyState >= 3 && Math.abs(video.duration - s.duration) < .2);
     if (ticket !== selection) return;
@@ -182,16 +182,22 @@ video.addEventListener('error', () => { if (current.media && video.getAttribute(
 
 async function setupAudio() {
   if (!audioContext) {
-    audioContext = new AudioContext(); analyser = audioContext.createAnalyser(); analyser.fftSize = 2048;
+    audioContext = new AudioContext({latencyHint:'interactive'}); analyser = audioContext.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant = 0;
     referenceSource = audioContext.createMediaElementSource(reference); referenceSource.connect(audioContext.destination);
   }
   await audioContext.resume();
 }
 async function openMic() {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Le micro nécessite localhost ou HTTPS et un navigateur récent.');
-  await setupAudio();
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Ouvre le lien HTTPS du studio directement dans Safari ou Chrome pour autoriser le micro.');
+  // Request permission inside the original click, before awaiting resume().
+  // On iPad a suspended AudioContext must not prevent the permission prompt.
+  const requested=stream?Promise.resolve(stream):navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,latency:{ideal:0},channelCount:{ideal:1}}});
+  const audioReady=setupAudio();
+  audioReady.catch(()=>{});
+  const acquired=await requested.catch(e=>{audioReady.catch(()=>{});throw e;});
+  try{await withMediaTimeout(audioReady);await withMediaTimeout(audioContext.resume());}catch(e){if(acquired!==stream)acquired.getTracks().forEach(t=>t.stop());throw e;}
   if (!stream) {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+    stream = acquired;
     micSource = audioContext.createMediaStreamSource(stream); micSource.connect(analyser);
   }
   $('#meterLabel').textContent = 'Micro actif';
@@ -214,18 +220,17 @@ function endRecording() {
 }
 async function replay(take) {
   closeMic(); document.querySelectorAll('#takes audio').forEach(a => a.pause());
+  const audioReady=setupAudio();audioReady.catch(()=>{});
   await selectScene(take.scene);
   if (!ready || mediaFailure) return;
   busy = true; lockNavigation(true); update();
   try {
-    await setupAudio(); rate = take.rate; $('#speed').value = rate; role = take.role;
+    await withMediaTimeout(audioReady); rate = take.rate; $('#speed').value = rate; role = take.role;
     renderRoles(); renderTrack(); reviewPeaks = take.peaks; await seek(take.start);
-    const audio = new Audio(take.url); pendingReview = audio;
-    reviewSource = audioContext.createMediaElementSource(audio); reviewSource.connect(analyser); reviewSource.connect(audioContext.destination);
-    await waitMedia(audio, 'canplay', () => audio.readyState >= 3);
+    const audio = new MontageAudio(take.buffer||await decodeFile(take.url)); pendingReview = audio;
     $('#hearReference').checked = false; reference.pause(); reviewing = true; busy = false; mixedPlayback = !!take.mixed;
     audio.timeline=take.timeline;audio.mixDuration=take.length;
-    if (current.media) { video.playbackRate = rate; syncBackground(); if(!take.timeline?.[0]?.hold)await video.play(); }
+    if (current.media) { video.playbackRate = rate; syncBackground(); }
     await audio.play(); playing = true; last = performance.now();
     pendingReview.sceneStart = take.start;
     audio.onended = () => { stop(); status('Fin de ta prise. À toi de rejouer !'); };
@@ -291,11 +296,7 @@ function frame(now) {
       const position=pendingReview.timeline?montagePosition(pendingReview.timeline,pendingReview.currentTime):null;
       const target = position?position.time:(pendingReview.sceneStart || 0) + pendingReview.currentTime * rate;
       if (current.media) {
-        if(position?.hold)video.pause();
-        else if(video.paused && !video.ended)video.play().catch(e=>{stop();status(e.message);});
-        if (video.readyState < 3 && !video.ended) pendingReview.pause();
-        else if (pendingReview.paused && !pendingReview.ended) pendingReview.play().catch(e => { stop(); status(e.message); });
-        if (!video.seeking && Math.abs(video.currentTime - target) > .14) video.currentTime = target;
+        followMontagePicture(pendingReview,position,target);
       }
       t = target;
     } else if (current.media) t = video.currentTime;
