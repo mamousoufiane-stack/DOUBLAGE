@@ -8,6 +8,13 @@ Python 3 est nécessaire. Aucune installation supplémentaire pour jouer.
 Alternative : python server.py --open
 
 NOUVEAUTES
+- Graphique agrandi par phrase : modèle VF violet et prise verte superposés,
+  curseur blanc et zoom temporel x2/x3. Trois zones indiquent quand se préparer,
+  parler et terminer. Le modèle contient aussi les bruitages de la VF.
+- Le micro capture 0,6 seconde avant et 1 seconde après chaque réplique.
+  Ces marges restent dans la prise ET dans le montage audio exporté.
+  Le montage insère de courtes pauses d'image aux limites de chaque phrase
+  enregistrée, sans accélérer ni superposer la fin avec le personnage suivant.
 - Choisir un personnage ou Toutes les voix, puis Enregistrer ma voix.
 - Une étape par réplique : écouter la VF, enregistrer après le décompte,
   écouter sa prise, recommencer ou valider. La capture s'arrête à la fin
@@ -114,3 +121,4 @@ Vice-Versa, VF : https://www.youtube.com/watch?v=GH2dbJBQQAE
 Ratatouille, bande : https://www.youtube.com/watch?v=AdQl1UVIiIA
 Ratatouille, VF : https://www.youtube.com/watch?v=GOh218v6KtE
 Inspiration de fonctionnement : https://www.dubtake.com/
+

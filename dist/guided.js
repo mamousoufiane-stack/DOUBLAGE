@@ -23,7 +23,7 @@ async function beginWorkshop() {
   stop(); closeMic();
   workshop = {scene: current, role, rate, queue: current.lines.map((_,i)=>i).filter(i=>role<0 || current.lines[i][2]===role), index:0, accepted:new Map(), candidate:null};
   guidedPanel.hidden = false;
-  $('#phraseHint').textContent = `Écoute, puis parle après le décompte. Chaque phrase s’arrête toute seule. Vitesse ${rate}×, conservée dans le montage. Le son est coupé pendant ta prise.`;
+  $('#phraseHint').textContent = `Après le décompte, suis le curseur : prépare-toi, puis parle dans la zone violette. Tu as encore 1 seconde pour finir. Vitesse ${rate}×.`;
   status(current.reference ? 'Les autres personnages garderont leur voix française.' : 'Cette animation n’a pas de voix originale : les personnages non joués resteront silencieux.');
   await seek(current.lines[workshop.queue[0]][0]); guidedUpdate();
   guidedPanel.scrollIntoView({behavior:'smooth',block:'nearest'});
@@ -42,28 +42,39 @@ async function recordPhrase() {
   try {
     if (!window.MediaRecorder) throw Error('Utilise Chrome ou Edge pour enregistrer.');
     await openMic();
-    const line = w.scene.lines[w.queue[w.index]];
+    const timing=phraseTiming(w),line=timing.line;
     await seek(line[0]); capturePeaks = []; $('#hearReference').checked = false; reference.pause();
     for(let n=3;n>0;n--) { $('#countdown').hidden=false; $('#countdown').textContent=n; await sleep(700); }
     $('#countdown').hidden=true;
     const chunks=[], mimeType=['audio/webm;codecs=opus','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m));
     const rec=new MediaRecorder(stream,mimeType?{mimeType}:{}); recorder=rec;
-    let offset=0, failed=false;
+    const capture={...timing,elapsed:0,peaks:[],started:0,timer:null,videoStarted:false,failed:false};
+    let failed=false;
     rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
     rec.onerror=()=>{failed=true; pauseSegment();};
-    rec.onstop=()=>{
-      if(!failed && chunks.length && workshop===w) {
+    rec.onstop=async()=>{
+      clearInterval(capture.timer);
+      if(!failed && !capture.failed && chunks.length && workshop===w) {
         disposePhrase(w.candidate);
         const blob=new Blob(chunks,{type:rec.mimeType});
-        w.candidate={blob,url:URL.createObjectURL(blob),offset};
+        const candidate={blob,url:URL.createObjectURL(blob),offset:0,pre:timing.pre,post:timing.post,peaks:[...capture.peaks]};
+        w.candidate=candidate;
+        try {
+          const buffer=await audioContext.decodeAudioData(await blob.arrayBuffer()),samples=buffer.getChannelData(0),peaks=[];
+          for(let a=0;a<samples.length;a+=Math.round(buffer.sampleRate/50)){
+            let peak=0;for(let b=a;b<Math.min(samples.length,a+buffer.sampleRate/50);b++)peak=Math.max(peak,Math.abs(samples[b]));peaks.push(peak);
+          }
+          candidate.peaks=peaks;
+        }catch{/* The captured live waveform remains available if preview decoding fails. */}
         $('#phraseHint').textContent='Écoute ta prise. Elle te plaît ? Valide ! Sinon, recommence cette phrase.';
       } else $('#phraseHint').textContent='La prise a échoué. Tu peux recommencer.';
+      w.capture=null;
       recording=false;busy=false;closeMic();update();
     };
-    rec.start(); const started=performance.now(); recording=true;
-    if(current.media) {video.playbackRate=w.rate;syncBackground();await video.play();offset=Math.max(0,(performance.now()-started)/1000-(video.currentTime-line[0])/w.rate);}
-    segmentEnd=line[1]; playing=true;last=performance.now();busy=false;
-    $('#phraseHint').textContent='À toi ! Parle maintenant…';
+    rec.start();recording=true;w.capture=capture;capture.started=performance.now();
+    video.playbackRate=w.rate;syncBackground();segmentEnd=null;playing=false;busy=false;
+    capture.timer=setInterval(updateCapture,25);
+    $('#phraseHint').textContent='Suis le curseur blanc. Le micro enregistre déjà : tu peux commencer sans craindre une coupure.';
   } catch(e) { $('#countdown').hidden=true;pauseSegment();busy=false;closeMic();$('#phraseHint').textContent='Enregistrement impossible : '+e.message; }
   update();
 }
@@ -148,21 +159,6 @@ async function stretchBacking(buffer, tempo) {
   }
   return out;
 }
-function assembleSoundtrack(scene, backing, phrases, sampleRate, tempo) {
-  const length=Math.ceil(scene.duration/tempo*sampleRate),out=[new Float32Array(length),new Float32Array(length)];
-  for(let c=0;c<2;c++) {
-    out[c].set(backing.getChannelData(c).subarray(0,length));
-    for(const {index,buffer,offset} of phrases) {
-      const line=scene.lines[index],from=Math.round(line[0]/tempo*sampleRate),to=Math.min(length,Math.round(line[1]/tempo*sampleRate));
-      const voice=buffer.getChannelData(Math.min(c,buffer.numberOfChannels-1)),skip=Math.round(offset*sampleRate);
-      for(let i=from;i<to;i++) {
-        const fade=Math.min(1,(i-from)/Math.max(1,sampleRate*.004),(to-1-i)/Math.max(1,sampleRate*.004));
-        out[c][i]=Math.max(-1,Math.min(1,out[c][i]+(voice[i-from+skip]||0)*fade));
-      }
-    }
-  }
-  return out;
-}
 function wavBlob(channels,sampleRate) {
   const n=channels[0].length,b=new ArrayBuffer(44+n*4),v=new DataView(b);
   function str(p,s){for(let i=0;i<s.length;i++)v.setUint8(p+i,s.charCodeAt(i));}
@@ -186,13 +182,13 @@ async function finishWorkshop() {
   try {
     await setupAudio();
     const [base,ambience]=await Promise.all([w.scene.reference?decodeFile(w.scene.reference):null,w.scene.media?decodeFile(w.scene.media):null]);
-    const phrases=await Promise.all([...w.accepted].map(async([index,p])=>({index,offset:p.offset,buffer:await audioContext.decodeAudioData(await p.blob.arrayBuffer())})));
+    const phrases=await Promise.all([...w.accepted].map(async([index,p])=>({index,offset:p.offset,pre:p.pre,post:p.post,buffer:await audioContext.decodeAudioData(await p.blob.arrayBuffer())})));
     const backing=await stretchBacking(backingTrack(w.scene,base,ambience,w.role,audioContext.sampleRate),w.rate);
-    const channels=assembleSoundtrack(w.scene,backing,phrases,audioContext.sampleRate,w.rate),peaks=[];
-    const stride=Math.round(audioContext.sampleRate/(25*w.rate));
+    const {channels,timeline,duration:mixDuration}=createComfortMix(w.scene,backing,phrases,audioContext.sampleRate,w.rate),peaks=[];
+    const stride=Math.round(audioContext.sampleRate/25);
     for(let i=0;i<channels[0].length;i+=stride){let peak=0;for(let j=i;j<Math.min(channels[0].length,i+stride);j++)peak=Math.max(peak,Math.abs(channels[0][j]));peaks.push(peak);}
     const blob=wavBlob(channels,audioContext.sampleRate);
-    takes.unshift({scene:w.scene,role:w.role,rate:w.rate,start:0,id:Date.now(),url:URL.createObjectURL(blob),type:'audio/wav',peaks,length:w.scene.duration,mixed:true});
+    takes.unshift({scene:w.scene,role:w.role,rate:w.rate,start:0,id:Date.now(),url:URL.createObjectURL(blob),type:'audio/wav',peaks,length:mixDuration,mixed:true,timeline});
     busy=false;leaveWorkshop();renderTakes();view('takes');status('Ton montage est prêt : tes phrases et les autres voix en VF !');
   } catch(e) {
     busy=false;

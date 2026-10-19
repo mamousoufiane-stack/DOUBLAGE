@@ -155,6 +155,7 @@ async function start() {
   update();
 }
 function stop() {
+  if(workshop?.capture)clearInterval(workshop.capture.timer);
   modelGeneration++;
   clearInterval(modelTimer); modelTimer = null;
   if (modelLoading) { modelLoading = false; busy = false; }
@@ -174,6 +175,7 @@ $('#hearReference').onchange = () => syncReference().catch(e => { $('#hearRefere
 $('#hearBackground').onchange = syncBackground;
 $('#stopReview').onclick = () => { stop(); status('Réécoute arrêtée. Tu peux refaire une prise.'); };
 video.addEventListener('ended', () => {
+  if(recording || (reviewing && pendingReview?.timeline))return;
   if (playing && current.media && video.currentTime >= duration() - .15) { t = duration(); stop(); }
 });
 video.addEventListener('error', () => { if (current.media && video.getAttribute('src')) { mediaFailure = true; stop(); status('Vidéo locale illisible ou manquante.'); } });
@@ -222,7 +224,8 @@ async function replay(take) {
     reviewSource = audioContext.createMediaElementSource(audio); reviewSource.connect(analyser); reviewSource.connect(audioContext.destination);
     await waitMedia(audio, 'canplay', () => audio.readyState >= 3);
     $('#hearReference').checked = false; reference.pause(); reviewing = true; busy = false; mixedPlayback = !!take.mixed;
-    if (current.media) { video.playbackRate = rate; syncBackground(); await video.play(); }
+    audio.timeline=take.timeline;audio.mixDuration=take.length;
+    if (current.media) { video.playbackRate = rate; syncBackground(); if(!take.timeline?.[0]?.hold)await video.play(); }
     await audio.play(); playing = true; last = performance.now();
     pendingReview.sceneStart = take.start;
     audio.onended = () => { stop(); status('Fin de ta prise. À toi de rejouer !'); };
@@ -263,24 +266,33 @@ function drawWaveforms() {
     $('#meterLabel').textContent = (reviewing ? 'Ta prise' : 'Micro actif') + ' · ' + (liveLevel > .00001 ? Math.round(20 * Math.log10(liveLevel)) + ' dBFS' : 'silence') + (peak > .98 ? ' · trop fort' : '');
   } else { g.strokeStyle = '#62647c'; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke(); }
   if (recording) { const index = Math.floor(t * 25); capturePeaks[index] = Math.max(capturePeaks[index] || 0, peak); activePeakIndex = index; }
+  if(typeof capturePeak==='function')capturePeak(peak);
   const canvas = $('#timelineWave'), a = canvas.getContext('2d'), width = canvas.width;
   a.clearRect(0, 0, width, canvas.height);
   function envelope(values, color, center, scale = 1) {
     a.strokeStyle = color; a.lineWidth = 1.2;
     for (let x = 0; x < width; x += 2) {
-      const index = Math.floor(x / width * duration() * 25), v = Math.min(1, (values[index] || 0) * scale);
+      const graphDuration=reviewing && pendingReview?.timeline && values===reviewPeaks?pendingReview.mixDuration:duration();
+      const index = Math.floor(x / width * graphDuration * 25), v = Math.min(1, (values[index] || 0) * scale);
       a.beginPath(); a.moveTo(x, center - v * 20); a.lineTo(x, center + Math.max(.5, v * 20)); a.stroke();
     }
   }
   envelope(current.peaks || [], '#b4a0ff', 25); envelope(reviewing ? reviewPeaks : capturePeaks, '#b8edb0', 75, 2);
-  a.strokeStyle = '#fff'; a.beginPath(); a.moveTo(t / duration() * width, 0); a.lineTo(t / duration() * width, 100); a.stroke();
+  a.strokeStyle = '#fff'; a.beginPath(); a.moveTo(t / duration() * width, 0); a.lineTo(t / duration() * width, 50); a.stroke();
+  const takeCursor=reviewing && pendingReview?.timeline?pendingReview.currentTime/pendingReview.mixDuration:t/duration();
+  a.beginPath();a.moveTo(takeCursor*width,50);a.lineTo(takeCursor*width,100);a.stroke();
   $('#waveHint').textContent = current.peaks ? 'Même chronologie : le témoin en haut, ta voix en bas.' : 'Pas de voix témoin dans cette mini-animation.';
+  if(reviewing && pendingReview?.timeline)$('#waveHint').textContent='Montage avec pauses : le modèle en haut, le montage complet en bas.';
+  if(typeof drawPhraseWave==='function')drawPhraseWave();
 }
 function frame(now) {
   if (playing) {
     if (reviewing && pendingReview) {
-      const target = (pendingReview.sceneStart || 0) + pendingReview.currentTime * rate;
+      const position=pendingReview.timeline?montagePosition(pendingReview.timeline,pendingReview.currentTime):null;
+      const target = position?position.time:(pendingReview.sceneStart || 0) + pendingReview.currentTime * rate;
       if (current.media) {
+        if(position?.hold)video.pause();
+        else if(video.paused && !video.ended)video.play().catch(e=>{stop();status(e.message);});
         if (video.readyState < 3 && !video.ended) pendingReview.pause();
         else if (pendingReview.paused && !pendingReview.ended) pendingReview.play().catch(e => { stop(); status(e.message); });
         if (!video.seeking && Math.abs(video.currentTime - target) > .14) video.currentTime = target;
@@ -290,7 +302,7 @@ function frame(now) {
     else t += Math.min((now - last) / 1000, .1) * rate;
     if (!reference.paused && current.reference && Math.abs(reference.currentTime - t) > .16) reference.currentTime = t;
     if (segmentEnd !== null && t >= segmentEnd) { t = segmentEnd; pauseSegment(); }
-    if (t >= duration()) { t = duration(); stop(); }
+    if (t >= duration() && !pendingReview?.timeline) { t = duration(); stop(); }
   }
   last = now; update(); drawWaveforms(); requestAnimationFrame(frame);
 }
