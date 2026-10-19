@@ -12,7 +12,7 @@ let waveform = new Float32Array(2048), liveLevel = 0, capturePeaks = [], reviewP
 let activePeakIndex = -1, monitoring = false, ready = true, mediaFailure = false;
 let pixelsPerSecond = 100;
 let workshop = null, segmentEnd = null, mixedPlayback = false;
-let modelSource = null, modelGeneration = 0;
+let modelTimer = null, modelGeneration = 0, modelLoading = false;
 const measure = document.createElement('canvas').getContext('2d');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -156,7 +156,8 @@ async function start() {
 }
 function stop() {
   modelGeneration++;
-  if (modelSource) { modelSource.onended = null; modelSource.stop(); modelSource.disconnect(); modelSource = null; }
+  clearInterval(modelTimer); modelTimer = null;
+  if (modelLoading) { modelLoading = false; busy = false; }
   segmentEnd = null; mixedPlayback = false; playing = false; video.pause(); reference.pause();
   if (pendingReview) { pendingReview.pause(); pendingReview = null; }
   reviewing = false; reviewSource?.disconnect(); reviewSource = null;

@@ -15,7 +15,7 @@ function guidedUpdate() {
   $('#phraseListen').disabled = locked || !w.candidate;
   $('#phraseAccept').disabled = locked || !w.candidate;
   $('#phraseAccept').textContent = w.index === w.queue.length - 1 ? 'Valider et créer le montage ✓' : 'Valider et suivante →';
-  $('#phraseCancel').disabled = busy || recording;
+  $('#phraseCancel').disabled = (busy && !modelLoading) || recording;
   lockNavigation(true);
   for (const id of ['play','record','seek','speed','restart','monitor','hearReference','hearBackground']) $('#'+id).disabled = true;
 }
@@ -67,33 +67,49 @@ async function recordPhrase() {
   } catch(e) { $('#countdown').hidden=true;pauseSegment();busy=false;closeMic();$('#phraseHint').textContent='Enregistrement impossible : '+e.message; }
   update();
 }
-const modelBuffers = new Map();
+function withMediaTimeout(promise, milliseconds = 10000) {
+  let timer;
+  return Promise.race([promise,new Promise((_,reject)=>{
+    timer=setTimeout(()=>reject(Error('La lecture tarde à démarrer. Réessaie ou vérifie ta connexion.')),milliseconds);
+  })]).finally(()=>clearTimeout(timer));
+}
+function stopModelAtBoundary() {
+  if(modelTimer!==null && segmentEnd!==null && reference.currentTime>=segmentEnd-.015) {
+    t=segmentEnd;pauseSegment();
+  }
+}
+reference.addEventListener('timeupdate',stopModelAtBoundary);
 async function modelPhrase() {
   if(!workshop || playing || busy) return;
   const w=workshop, ticket=++modelGeneration;
-  busy=true;update();$('#phraseAudio').pause();reference.pause();
+  busy=true;modelLoading=true;update();$('#phraseAudio').pause();reference.pause();
+  $('#phraseHint').textContent='Préparation de la phrase… Tu peux quitter l’atelier pendant le chargement.';
   try {
-    const line=w.scene.lines[w.queue[w.index]],key=w.scene.reference+'@'+w.rate;
-    await setupAudio();
-    if(!modelBuffers.has(key))modelBuffers.set(key,await stretchBacking(await decodeFile(w.scene.reference),w.rate));
+    // A previous microphone session may have routed this element through Web
+    // Audio. Resume it from this click, without creating/decoding a new buffer.
+    if(audioContext)await withMediaTimeout(audioContext.resume());
     if(ticket!==modelGeneration||workshop!==w)return;
+    const line=w.scene.lines[w.queue[w.index]];
     await seek(line[0]);
     if(ticket!==modelGeneration||workshop!==w)return;
-    $('#hearReference').checked=true;
-    // Bound the audio itself, not only the animation loop. Each click gets a
-    // fresh source; a delayed play promise cannot restart the whole VF track.
-    segmentEnd=line[1];
-    if(current.media){video.playbackRate=w.rate;video.muted=true;await video.play();}
+    await waitMedia(reference,'loadedmetadata',()=>reference.readyState>=1,10000);
     if(ticket!==modelGeneration||workshop!==w)return;
-    const source=audioContext.createBufferSource();source.buffer=modelBuffers.get(key);
-    source.connect(audioContext.destination);modelSource=source;
-    source.onended=()=>{if(modelSource===source){t=line[1];pauseSegment();}};
-    const position=current.media?Math.max(line[0],video.currentTime):line[0];
-    source.start(0,position/w.rate,Math.max(0,(line[1]-position)/w.rate));
+    reference.currentTime=line[0];
+    await waitMedia(reference,'seeked',()=>!reference.seeking && Math.abs(reference.currentTime-line[0])<.12,10000);
+    if(ticket!==modelGeneration||workshop!==w)return;
+    $('#hearReference').checked=true;
+    reference.playbackRate=w.rate;reference.preservesPitch=true;
+    video.playbackRate=w.rate;video.muted=true;
+    // Arm the limit BEFORE playback, independently of animation frames and
+    // before awaiting either media element's play promise.
+    segmentEnd=line[1];modelTimer=setInterval(stopModelAtBoundary,25);
     playing=true;last=performance.now();
+    await withMediaTimeout(Promise.all([reference.play(),current.media?video.play():Promise.resolve()]));
+    if(ticket!==modelGeneration||workshop!==w)return;
+    $('#phraseHint').textContent='Écoute cette phrase. Tu pourras la réécouter ou l’enregistrer.';
   }
-  catch(e){pauseSegment();$('#phraseHint').textContent=e.message;}
-  finally{busy=false;update();}
+  catch(e){if(ticket===modelGeneration){pauseSegment();$('#phraseHint').textContent=e.message;}}
+  finally{if(ticket===modelGeneration){busy=false;modelLoading=false;}update();}
 }
 async function decodeFile(url) {
   const response=await fetch(url); if(!response.ok) throw Error('Fichier audio local manquant.');
