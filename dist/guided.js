@@ -67,10 +67,31 @@ async function recordPhrase() {
   } catch(e) { $('#countdown').hidden=true;pauseSegment();busy=false;closeMic();$('#phraseHint').textContent='Enregistrement impossible : '+e.message; }
   update();
 }
+const modelBuffers = new Map();
 async function modelPhrase() {
   if(!workshop || playing || busy) return;
-  busy=true;update();$('#phraseAudio').pause();
-  try {const line=current.lines[workshop.queue[workshop.index]];await seek(line[0]);$('#hearReference').checked=true;await start();segmentEnd=line[1];}
+  const w=workshop, ticket=++modelGeneration;
+  busy=true;update();$('#phraseAudio').pause();reference.pause();
+  try {
+    const line=w.scene.lines[w.queue[w.index]],key=w.scene.reference+'@'+w.rate;
+    await setupAudio();
+    if(!modelBuffers.has(key))modelBuffers.set(key,await stretchBacking(await decodeFile(w.scene.reference),w.rate));
+    if(ticket!==modelGeneration||workshop!==w)return;
+    await seek(line[0]);
+    if(ticket!==modelGeneration||workshop!==w)return;
+    $('#hearReference').checked=true;
+    // Bound the audio itself, not only the animation loop. Each click gets a
+    // fresh source; a delayed play promise cannot restart the whole VF track.
+    segmentEnd=line[1];
+    if(current.media){video.playbackRate=w.rate;video.muted=true;await video.play();}
+    if(ticket!==modelGeneration||workshop!==w)return;
+    const source=audioContext.createBufferSource();source.buffer=modelBuffers.get(key);
+    source.connect(audioContext.destination);modelSource=source;
+    source.onended=()=>{if(modelSource===source){t=line[1];pauseSegment();}};
+    const position=current.media?Math.max(line[0],video.currentTime):line[0];
+    source.start(0,position/w.rate,Math.max(0,(line[1]-position)/w.rate));
+    playing=true;last=performance.now();
+  }
   catch(e){pauseSegment();$('#phraseHint').textContent=e.message;}
   finally{busy=false;update();}
 }
@@ -169,3 +190,4 @@ $('#phraseModel').onclick=modelPhrase;
 $('#phraseListen').onclick=()=>{const a=$('#phraseAudio');a.src=workshop.candidate.url;a.hidden=false;a.play().catch(e=>$('#phraseHint').textContent=e.message);};
 $('#phraseAccept').onclick=acceptPhrase;
 $('#phraseCancel').onclick=()=>{leaveWorkshop();status('Atelier quitté. Les phrases non montées ont été effacées.');};
+
